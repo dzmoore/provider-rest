@@ -1,4 +1,4 @@
-module github.com/crossplane/provider-rest
+module github.com/dzmoore/provider-rest
 
 go 1.21
 

@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package v1alpha1 contains the v1alpha1 group Sample resources of the REST provider.
 // +kubebuilder:object:generate=true
-// +groupName=rest.rest.crossplane.io
+// +groupName=rest.crossplane.io
 // +versionName=v1alpha1
 package v1alpha1
 

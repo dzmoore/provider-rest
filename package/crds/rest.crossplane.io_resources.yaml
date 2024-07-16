@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.14.0
-  name: resources.rest.rest.crossplane.io
+  name: resources.rest.crossplane.io
 spec:
-  group: rest.rest.crossplane.io
+  group: rest.crossplane.io
   names:
     categories:
     - crossplane
@@ -73,10 +73,22 @@ spec:
               forProvider:
                 description: ResourceParameters are the configurable fields of a Resource.
                 properties:
-                  configurableField:
-                    type: string
-                required:
-                - configurableField
+                  base:
+                    properties:
+                      headers:
+                        items:
+                          properties:
+                            type:
+                              type: string
+                          required:
+                          - type
+                          type: object
+                        type: array
+                      url:
+                        type: string
+                    required:
+                    - url
+                    type: object
                 type: object
               managementPolicies:
                 default:

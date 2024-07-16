@@ -37,10 +37,10 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 
-	"github.com/crossplane/provider-rest/apis"
-	"github.com/crossplane/provider-rest/apis/v1alpha1"
-	rest "github.com/crossplane/provider-rest/internal/controller"
-	"github.com/crossplane/provider-rest/internal/features"
+	"github.com/dzmoore/provider-rest/apis"
+	"github.com/dzmoore/provider-rest/apis/v1alpha1"
+	rest "github.com/dzmoore/provider-rest/internal/controller"
+	"github.com/dzmoore/provider-rest/internal/features"
 )
 
 func main() {

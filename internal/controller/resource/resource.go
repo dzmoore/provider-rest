@@ -19,8 +19,10 @@ package resource
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/pkg/errors"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,22 +30,29 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
+	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 
-	"github.com/crossplane/provider-rest/apis/resource/v1alpha1"
-	apisv1alpha1 "github.com/crossplane/provider-rest/apis/v1alpha1"
-	"github.com/crossplane/provider-rest/internal/features"
+	httpClient "github.com/dzmoore/provider-rest/internal/clients/http"
+	"github.com/dzmoore/provider-rest/internal/utils"
+
+	"github.com/dzmoore/provider-rest/apis/resource/v1alpha1"
+	apisv1alpha1 "github.com/dzmoore/provider-rest/apis/v1alpha1"
+	"github.com/dzmoore/provider-rest/internal/features"
+
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 )
 
 const (
-	errNotResource  = "managed resource is not a Resource custom resource"
-	errTrackPCUsage = "cannot track ProviderConfig usage"
-	errGetPC        = "cannot get ProviderConfig"
-	errGetCreds     = "cannot get credentials"
-
-	errNewClient = "cannot create new Service"
+	errNotResource      = "managed resource is not a Resource custom resource"
+	errTrackPCUsage     = "cannot track ProviderConfig usage"
+	errGetPC            = "cannot get ProviderConfig"
+	errGetCreds         = "cannot get credentials"
+	errNewHttpClient    = "cannot create new Http client"
+	errNewClient        = "cannot create new Service"
+	errGetLatestVersion = "failed to get the latest version of the resource"
 )
 
 // A NoOpService does nothing.
@@ -65,9 +74,11 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 	r := managed.NewReconciler(mgr,
 		resource.ManagedKind(v1alpha1.ResourceGroupVersionKind),
 		managed.WithExternalConnecter(&connector{
-			kube:         mgr.GetClient(),
-			usage:        resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			newServiceFn: newNoOpService}),
+			logger:          o.Logger,
+			kube:            mgr.GetClient(),
+			usage:           resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			newHttpClientFn: httpClient.NewClient,
+		}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
@@ -84,9 +95,10 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 // A connector is expected to produce an ExternalClient when its Connect method
 // is called.
 type connector struct {
-	kube         client.Client
-	usage        resource.Tracker
-	newServiceFn func(creds []byte) (interface{}, error)
+	logger          logging.Logger
+	kube            client.Client
+	usage           resource.Tracker
+	newHttpClientFn func(log logging.Logger, timeout time.Duration) (httpClient.Client, error)
 }
 
 // Connect typically produces an ExternalClient by:
@@ -100,6 +112,8 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.New(errNotResource)
 	}
 
+	l := c.logger.WithValues("resource", cr.Name)
+
 	if err := c.usage.Track(ctx, mg); err != nil {
 		return nil, errors.Wrap(err, errTrackPCUsage)
 	}
@@ -109,26 +123,24 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	cd := pc.Spec.Credentials
-	data, err := resource.CommonCredentialExtractor(ctx, cd.Source, c.kube, cd.CommonCredentialSelectors)
+	h, err := c.newHttpClientFn(l, utils.WaitTimeout(&v1.Duration{Duration: time.Duration(30) * time.Second}))
 	if err != nil {
-		return nil, errors.Wrap(err, errGetCreds)
+		return nil, errors.Wrap(err, errNewHttpClient)
 	}
 
-	svc, err := c.newServiceFn(data)
-	if err != nil {
-		return nil, errors.Wrap(err, errNewClient)
-	}
-
-	return &external{service: svc}, nil
+	return &external{
+		localKube: c.kube,
+		logger:    l,
+		http:      h,
+	}, nil
 }
 
 // An ExternalClient observes, then either creates, updates, or deletes an
 // external resource to ensure it reflects the managed resource's desired state.
 type external struct {
-	// A 'client' used to connect to the external resource API. In practice this
-	// would be something like an AWS SDK client.
-	service interface{}
+	localKube client.Client
+	logger    logging.Logger
+	http      httpClient.Client
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
@@ -140,16 +152,29 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// These fmt statements should be removed in the real implementation.
 	fmt.Printf("Observing: %+v", cr)
 
+	// Get the latest version of the resource before updating
+	if err := c.localKube.Get(ctx, types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}, cr); err != nil {
+		return managed.ExternalObservation{}, errors.Wrap(err, errGetLatestVersion)
+	}
+
+	deleting := cr.Status.GetCondition(xpv1.TypeReady).Reason == xpv1.ReasonDeleting
+
+	if !deleting {
+		cr.Status.SetConditions(xpv1.Available())
+	} else {
+		cr.Status.SetConditions(xpv1.Unavailable())
+	}
+
 	return managed.ExternalObservation{
 		// Return false when the external resource does not exist. This lets
 		// the managed resource reconciler know that it needs to call Create to
 		// (re)create the resource, or that it has successfully been deleted.
-		ResourceExists: true,
+		ResourceExists: !deleting,
 
 		// Return false when the external resource exists, but it not up to date
 		// with the desired managed resource state. This lets the managed
 		// resource reconciler know that it needs to call Update.
-		ResourceUpToDate: true,
+		ResourceUpToDate: !deleting,
 
 		// Return any details that may be required to connect to the external
 		// resource. These will be stored as the connection secret.

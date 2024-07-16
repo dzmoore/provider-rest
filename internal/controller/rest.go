@@ -20,8 +20,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/crossplane/provider-rest/internal/controller/config"
-	"github.com/crossplane/provider-rest/internal/controller/resource"
+	"github.com/dzmoore/provider-rest/internal/controller/config"
+	"github.com/dzmoore/provider-rest/internal/controller/resource"
 )
 
 // Setup creates all REST controllers with the supplied logger and adds them to

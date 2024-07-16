@@ -25,9 +25,18 @@ import (
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 )
 
+type Header struct {
+	Type string `json:"type"`
+}
+
+type Base struct {
+	URL     string   `json:"url"`
+	Headers []Header `json:"headers,omitempty"`
+}
+
 // ResourceParameters are the configurable fields of a Resource.
 type ResourceParameters struct {
-	ConfigurableField string `json:"configurableField"`
+	Base Base `json:"base,omitempty"`
 }
 
 // ResourceObservation are the observable fields of a Resource.

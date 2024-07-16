@@ -1,0 +1,103 @@
+apiVersion: rest.crossplane.io/v1alpha1
+kind: Resource
+metadata:
+  name: example
+spec:
+  forProvider:
+    base:
+      url: https://api.example.com/foos
+
+      headers:
+        - type: Literal # default
+          name: X-Foo-Header
+          literal:
+            value: foobar
+        
+        - type: FromSecrets
+          name: Authorization
+          fromSecrets:
+            secretRefs:
+              - name: api-creds
+                namespace: crossplane-system
+                key: api_id
+              - name: api-creds
+                namespace: crossplane-system
+                key: api_secret
+            formatType: YQ # default
+            yq: 
+              format: '"Basic " + (.[0] + ":" + .[1] | @base64)'
+
+        - type: FromSecrets
+          name: Authorization
+          fromSecrets:
+            secretRefs:
+              - name: token-secret
+                namespace: crossplane-system
+                key: token
+            formatType: YQ # default
+            yq:
+              format: '"Bearer " + (.[0].access_token)'
+
+    create:
+      request:
+        verb: POST
+        headers:
+          - type: Literal # default
+            name: X-Baz-Header
+            literal:
+              value: baz
+        body: |
+          {
+            "foo": "bar",
+            "baz": "test"
+          }
+        transforms:
+          body:
+            - type: FromSecrets
+              toField: '.app.password'
+              fromSecrets:
+                secretRefs:
+                  - name: app-secret
+                    namespace: crossplane-system
+                    key: password
+                formatType: YQ # default
+                yq:
+                  format: '.[0]' 
+      response:
+        transforms:
+          body: '.response.body[0]'
+
+    read:
+      request:
+        verb: GET
+        url: '.response.headers.Location'
+      response:
+        transforms:
+          body: '.response.body[0]'
+
+    update:
+      request:
+        verb: POST
+        body: .response.body
+        transforms:
+          body:
+            - type: FromSecrets
+              toField: '.app.password'
+              fromSecrets:
+                formatType: YQ # default
+                secretRefs:
+                  - name: app-secret
+                    namespace: crossplane-system
+                    key: password
+                format: '.[0]' 
+      response:
+        transforms:
+          body: '.response.body[0]'
+    
+    delete:
+      request:
+        verb: DELETE
+        url: '.base.url + "?foo=bar&baz=test&special=" + (.response.body.special | @uri) '
+
+  providerConfigRef:
+    name: default

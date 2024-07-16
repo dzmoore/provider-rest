@@ -21,11 +21,20 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 )
+
+const (
+	errNotRESTResourceObject = "managed resource is not a Resource custom resource"
+)
+
+type notRESTResource struct {
+	resource.Managed
+}
 
 // Unlike many Kubernetes projects Crossplane does not use third party testing
 // libraries, per the common Go test review comments. Crossplane encourages the
@@ -56,7 +65,31 @@ func TestObserve(t *testing.T) {
 		args   args
 		want   want
 	}{
-		// TODO: Add test cases.
+		"NotRESTResource": {
+			args: args{
+				mg: notRESTResource{},
+			},
+			want: want{
+				err: errors.New(errNotRESTResourceObject),
+			},
+		},
+		"RequestFailed": {
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, skipTLSVerify bool) (resp httpClient.HttpDetails, err error) {
+						return httpClient.HttpDetails{}, errBoom
+					},
+				},
+				localKube: &test.MockClient{
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+					MockGet:          test.NewMockGetFn(nil),
+				},
+				mg: httpRequest(),
+			},
+			want: want{
+				err: errors.Wrap(errBoom, errFailedToSendHttpRequest),
+			},
+		},
 	}
 
 	for name, tc := range cases {
